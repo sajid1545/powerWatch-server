@@ -12,6 +12,13 @@ Base.metadata.create_all(bind=engine)
 app=FastAPI(title='PowerWatch API',version='1.0.0',description='Load shedding and power outage management API')
 app.add_middleware(CORSMiddleware,allow_origins=os.getenv('CLIENT_URL','http://localhost:5173').split(','),allow_credentials=True,allow_methods=['*'],allow_headers=['*'])
 app.include_router(auth.router,prefix='/api'); app.include_router(resources.router,prefix='/api')
+@app.middleware('http')
+async def disable_api_cache(request:Request,call_next):
+    response=await call_next(request)
+    if request.url.path.startswith('/api/'):
+        response.headers['Cache-Control']='no-store, no-cache, must-revalidate'
+        response.headers['Pragma']='no-cache'
+    return response
 @app.get('/api/health')
 def health(): return {'success':True,'message':'PowerWatch API is healthy','data':None}
 @app.exception_handler(HTTPException)

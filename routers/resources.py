@@ -1,15 +1,36 @@
 from datetime import date, datetime, time, timezone
+from functools import lru_cache
+import json
+from urllib.error import URLError
+from urllib.request import urlopen
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import asc, desc, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 from database import get_db
 from models import Area, Report, Schedule, User
-from schemas import AreaCreate, ReportCreate, ReportOut, ReportUpdate, ScheduleCreate, ScheduleOut, ScheduleUpdate, UserOut
+from schemas import AreaCreate, LocationArea, ReportCreate, ReportOut, ReportUpdate, ScheduleCreate, ScheduleOut, ScheduleUpdate, UserOut
 from security import admin_user, current_user
 
 router=APIRouter(tags=['Resources'])
 def response(message,data=None,**extra): return {'success':True,'message':message,'data':data,**extra}
+@lru_cache(maxsize=80)
+def bd_geo(path):
+    try:
+        with urlopen(f'https://bdapis.pro.bd/geo/v2.0/{path}',timeout=8) as result: return json.load(result).get('data',[])
+    except (URLError,TimeoutError,ValueError): raise HTTPException(503,'Bangladesh location service is temporarily unavailable')
+@router.get('/locations/divisions')
+def divisions(): return response('Divisions loaded',bd_geo('divisions'))
+@router.get('/locations/districts/{division_id}')
+def districts(division_id:int): return response('Districts loaded',bd_geo(f'districts/{division_id}'))
+@router.get('/locations/upazilas/{district_id}')
+def upazilas(district_id:int): return response('Upazilas loaded',bd_geo(f'upazilas/{district_id}'))
+@router.get('/locations/areas')
+def location_areas():
+    divisions={str(x['id']):x['name'] for x in bd_geo('divisions')}; districts=bd_geo('districts'); district_map={str(x['id']):x for x in districts}; rows=[]
+    for item in bd_geo('upazilas'):
+        district=district_map.get(str(item.get('district_id')),{}); rows.append({'id':item['id'],'name':item['name'],'bn_name':item.get('bn_name',''),'district':district.get('name',''),'division':divisions.get(str(district.get('division_id')),'')})
+    return response('Bangladesh areas loaded',rows)
 def paginate(query,page,limit):
     page=max(page,1); limit=min(max(limit,1),100); total=query.order_by(None).count(); return query.offset((page-1)*limit).limit(limit).all(),{'page':page,'limit':limit,'total':total,'totalPages':max(1,(total+limit-1)//limit)}
 @router.get('/areas')
@@ -21,6 +42,12 @@ def create_area(data:AreaCreate,admin=Depends(admin_user),db:Session=Depends(get
     try: db.commit()
     except IntegrityError: db.rollback(); raise HTTPException(409,'Area already exists')
     db.refresh(item); return response('Area created',item)
+@router.post('/areas/resolve')
+def resolve_area(data:LocationArea,user=Depends(current_user),db:Session=Depends(get_db)):
+    item=db.query(Area).filter(Area.name==data.name,Area.district==data.district).first()
+    if not item:
+        item=Area(name=data.name,district=data.district,zone=data.division,description=f'{data.name}, {data.district}, Bangladesh',status='active'); db.add(item); db.commit(); db.refresh(item)
+    return response('Area resolved',item)
 @router.patch('/areas/{item_id}')
 def update_area(item_id:int,data:AreaCreate,admin=Depends(admin_user),db:Session=Depends(get_db)):
     item=db.get(Area,item_id)
@@ -34,8 +61,8 @@ def delete_area(item_id:int,admin=Depends(admin_user),db:Session=Depends(get_db)
     if db.query(Schedule).filter(Schedule.area_id==item_id).first() or db.query(Report).filter(Report.area_id==item_id).first(): raise HTTPException(409,'Area is in use')
     db.delete(item); db.commit(); return response('Area deleted')
 @router.get('/schedules')
-def schedules(search:str='',status:str|None=None,area:int|None=None,startDate:date|None=None,endDate:date|None=None,page:int=1,limit:int=10,sort:str='newest',db:Session=Depends(get_db)):
-    q=db.query(Schedule).options(joinedload(Schedule.area)).join(Area); q=q.filter(or_(Schedule.title.ilike(f'%{search}%'),Area.name.ilike(f'%{search}%'))) if search else q; q=q.filter(Schedule.status==status) if status else q; q=q.filter(Schedule.area_id==area) if area else q; q=q.filter(Schedule.outage_date>=startDate) if startDate else q; q=q.filter(Schedule.outage_date<=endDate) if endDate else q; order=asc(Schedule.title) if sort=='name' else (asc(Schedule.outage_date) if sort=='date' else desc(Schedule.created_at)); rows,meta=paginate(q.order_by(order),page,limit); return response('Schedules loaded',[ScheduleOut.model_validate(x) for x in rows],pagination=meta)
+def schedules(search:str='',status:str|None=None,area:int|None=None,areaName:str|None=None,district:str|None=None,startDate:date|None=None,endDate:date|None=None,page:int=1,limit:int=10,sort:str='newest',db:Session=Depends(get_db)):
+    q=db.query(Schedule).options(joinedload(Schedule.area)).join(Area); q=q.filter(or_(Schedule.title.ilike(f'%{search}%'),Area.name.ilike(f'%{search}%'))) if search else q; q=q.filter(Schedule.status==status) if status else q; q=q.filter(Schedule.area_id==area) if area else q; q=q.filter(Area.name==areaName) if areaName else q; q=q.filter(Area.district==district) if district else q; q=q.filter(Schedule.outage_date>=startDate) if startDate else q; q=q.filter(Schedule.outage_date<=endDate) if endDate else q; order=asc(Schedule.title) if sort=='name' else (asc(Schedule.outage_date) if sort=='date' else desc(Schedule.created_at)); rows,meta=paginate(q.order_by(order),page,limit); return response('Schedules loaded',[ScheduleOut.model_validate(x) for x in rows],pagination=meta)
 @router.get('/schedules/{item_id}')
 def schedule(item_id:int,db:Session=Depends(get_db)):
     item=db.query(Schedule).options(joinedload(Schedule.area)).filter(Schedule.id==item_id).first()

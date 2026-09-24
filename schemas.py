@@ -5,8 +5,9 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 class ORM(BaseModel): model_config=ConfigDict(from_attributes=True)
 class AreaOut(ORM): id:int; name:str; district:str; zone:str; description:str|None=None; status:str; created_at:datetime
 class AreaCreate(BaseModel): name:str=Field(min_length=2,max_length=120); district:str=Field(min_length=2,max_length=120); zone:str=Field(min_length=1,max_length=120); description:str|None=None; status:Literal['active','inactive']='active'
+class LocationArea(BaseModel): name:str=Field(min_length=2,max_length=120); district:str=Field(min_length=2,max_length=120); division:str=Field(min_length=2,max_length=120)
 class UserOut(ORM): id:int; name:str; email:EmailStr; phone:str|None=None; role:str; area_id:int|None=None; area:AreaOut|None=None; created_at:datetime
-class Signup(BaseModel): name:str=Field(min_length=2,max_length=120); email:EmailStr; password:str=Field(min_length=8,max_length=72); phone:str|None=None; area_id:int|None=None
+class Signup(BaseModel): name:str=Field(min_length=2,max_length=120); email:EmailStr; password:str=Field(min_length=8,max_length=72); phone:str|None=None; area_id:int|None=None; area_name:str|None=None; district:str|None=None; division:str|None=None
 class Login(BaseModel): email:EmailStr; password:str
 class ProfileUpdate(BaseModel): name:str=Field(min_length=2,max_length=120); phone:str|None=None; area_id:int|None=None
 class TokenRefresh(BaseModel): refresh_token:str

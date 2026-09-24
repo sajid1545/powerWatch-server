@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 from database import get_db
-from models import PasswordReset, RefreshToken, User
+from models import Area, PasswordReset, RefreshToken, User
 from schemas import ForgotPassword, Login, ProfileUpdate, ResetPassword, Signup, TokenRefresh, UserOut
 from security import current_user, decode, digest, hash_password, random_token, token, verify_password
 
@@ -12,7 +12,13 @@ def user_data(user): return UserOut.model_validate(user).model_dump(mode='json')
 @router.post('/signup',status_code=201)
 def signup(data:Signup,db:Session=Depends(get_db)):
     if db.query(User).filter(User.email==data.email.lower()).first(): raise HTTPException(409,'Email already registered')
-    user=User(name=data.name.strip(),email=data.email.lower(),password_hash=hash_password(data.password),phone=data.phone,area_id=data.area_id); db.add(user); db.commit(); db.refresh(user)
+    area_id=data.area_id
+    if not area_id and data.area_name and data.district:
+        area=db.query(Area).filter(Area.name==data.area_name,Area.district==data.district).first()
+        if not area:
+            area=Area(name=data.area_name,district=data.district,zone=data.division or data.district,description=f'{data.area_name}, {data.district}, Bangladesh',status='active'); db.add(area); db.flush()
+        area_id=area.id
+    user=User(name=data.name.strip(),email=data.email.lower(),password_hash=hash_password(data.password),phone=data.phone,area_id=area_id); db.add(user); db.commit(); db.refresh(user)
     return {'success':True,'message':'Account created','data':{'user':user_data(user),**issue_tokens(user,db)}}
 def issue_tokens(user,db):
     access,refresh=token(user),token(user,'refresh'); payload=decode(refresh,'refresh'); db.add(RefreshToken(user_id=user.id,token_hash=digest(refresh),expires_at=datetime.fromtimestamp(payload['exp'],timezone.utc))); db.commit(); return {'access_token':access,'refresh_token':refresh}
